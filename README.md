@@ -12,7 +12,7 @@ The GL way is easier to implement and, given examples, relatively painless. Howe
 The QPU way is a lot more involved, requires potentially weeks of research (maybe less if my examples serve their intended purpose), and errors are guaranteed. However, by directly using the QPUs instruction set, you can optimize your algorithm to fit the QPUs pecularities and ultimately achieve a much better framerate. Even with higher resolutions or more complex shaders the frame time is generally measured in milliseconds.
 
 ### Examples?
-There are some clean examples on how to use both the GL and QPU way. Look into Commands.txt for example commands to invoke these examples.
+There are some clean examples on how to use both the GL and QPU way. Look into Commands.txt for example commands to invoke these examples. To compile the qpu_programs, you first need to make and install [vc4asm](https://github.com/maazl/vc4asm/).
 #### GL
 1. GLCV (main_gl): Simple program executing only a simple shader blitting the camera frame to the screen. Supports all color spaces (Y,YUV,RGB), and scales the frame to fit the screen.
 2. GLBlobs (main_gl_blobs): Executes a two-pass blob-detection shader on the image, resulting in a binary full-resolution image. Also includes a simple CPU-side connected component labeling algorithm (fast, but does not merge close-by components, so large blobs might have smaller satellite blobs around it).
