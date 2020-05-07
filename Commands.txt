@@ -1,0 +1,34 @@
+mkdir build
+cd build
+cmake ..
+make
+
+# Terminate all examples with Q (soft) or Ctrl-C (hard)
+
+# Simple camera blit
+./GLCV -c Y -w 640 -h 480 -f 40
+./GLCV -c YUV -w 640 -h 480 -f 40
+./GLCV -c RGB -w 640 -h 480 -f 40
+
+# Blob detection: Need some LEDs or a Flashlight at hand
+./GLBlobs -c Y -w 640 -h 480 -f 45 -s 100
+./GLBlobs -c Y -w 960 -h 540 -f 30 -s 100
+./GLBlobs -c Y -w 1280 -h 720 -f 20 -s 100
+./GLBlobs -c Y -w 1640 -h 1232 -f 12 -s 100
+
+# Compile QPU programs
+make qpu
+
+# First test of VPM
+sudo ./QPUCV -c qpu_fb_pattern.bin -m full -d
+
+# Debug and camera blit using simple fullscreen mode (one QPU doing whole frame)
+sudo ./QPUCV -c qpu_debug_full.bin -m full -d -w 640 -h 480 -f 40
+sudo ./QPUCV -c qpu_blit_full.bin -m full -d -w 640 -h 480 -f 40
+
+# Simple threshold filter (0.5) to custom 1-bit buffer in fullscreen mode (CPU then blits that buffer to framebuffer)
+sudo ./QPUCV -c qpu_mask_full.bin -m bitmsk -d -w 640 -h 480 -f 40
+
+# Debug and attempt at camera blit using tiled mode (multiple QPUs working on tiles of the screen)
+sudo ./QPUCV -c qpu_debug_tiled.bin -m tiled -d -w 640 -h 480 -f 40
+sudo ./QPUCV -c qpu_blit_tiled.bin -m tiled -d -w 640 -h 480 -f 10
