@@ -16,7 +16,7 @@ make
 ./GLBlobs -c Y -w 1280 -h 720 -f 20 -s 100
 ./GLBlobs -c Y -w 1640 -h 1232 -f 12 -s 100
 
-# Compile QPU programs
+# Compile QPU programs - REQUIRES vc4asm to be installed!
 make qpu
 
 # First test of VPM
