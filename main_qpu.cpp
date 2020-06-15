@@ -38,9 +38,10 @@ int main(int argc, char **argv)
 	uint32_t maxNumFrames = -1; // Enough to run for years
 	bool drawToFrameBuffer = false;
 	int mode = FULL_FRAME;
+	bool enableQPU[12];
 
 	int arg;
-	while ((arg = getopt(argc, argv, "c:w:h:f:s:i:m:o:t:d")) != -1)
+	while ((arg = getopt(argc, argv, "c:w:h:f:s:i:m:o:t:dq:")) != -1)
 	{
 		switch (arg)
 		{
@@ -74,6 +75,11 @@ int main(int argc, char **argv)
 			case 'd':
 				drawToFrameBuffer = true;
 				break;
+			case 'q':
+				for (int i = 0; i < 12 && i < strlen(optarg); i++)
+				{
+					enableQPU[i] = optarg[i] == '1';
+				}
 			default:
 				printf("Usage: %s -c codefile [-w width] [-h height] [-f fps] [-s shutter-speed-ns] [-i iso] [-m mode (full, tiled, bitmsk)] [-d display-to-fb] [-t max-num-frames]\n", argv[0]);
 				break;
@@ -157,14 +163,15 @@ int main(int argc, char **argv)
 	int numProgCols = (int)floor(numTileCols / 16.0); // Number of instances required (QPU is 16-way)
 	int droppedTileCols = numTileCols - numProgCols * 16; // Some are dropped for maximum performance, extra effort is not worth it
 	int splitCols = 1;
-	while (numProgCols * (splitCols+1) <= 12)
+/*	while (numProgCols * (splitCols+1) <= 12)
 	{ // Split columns among QPUs to minimize the number of idle QPUs
 		splitCols++;
-	}
+	}*/
 	int numInstances = numProgCols * splitCols;
 	if (mode == TILED)
 		printf("SETUP: %d instances processing 1/%d columns each, covering %dx%d tiles, plus %d columns dropped\n",
 			numInstances, splitCols, numProgCols*16, numTileRows, droppedTileCols);
+	else numInstances = 1;
 
 	// ---- Setup program ----
 
@@ -231,12 +238,31 @@ int main(int argc, char **argv)
 	qpu_getUserProgramInfo(&upInfo, &base);
 	printf("Reserved %d / %d vectors of VPM memory for user programs!\n", upInfo.VPMURSV_V, hwConfig.VPMSZ_V);
 	// QPU scheduler reservation
-	for (int i = 0; i < 12; i++) // Reserve ALL QPUs for user programs
-		qpu_setReservationSetting(&base, i, 0b1110);
+//	for (int i = 0; i < 12; i++) // Reset all QPUs to be freely sheduled
+//		qpu_setReservationSetting(&base, i, 0b0000);
+
+	for (int i = 0; i < 12; i++) // Disable ALL QPUs
+		qpu_setReservationSetting(&base, i, 0b0001);
+	for (int i = 0; i < 12; i++) // Enable only QPUs selected as parameter
+		qpu_setReservationSetting(&base, i, enableQPU[i]? 0b1110 : 0b1111);
+//	qpu_setReservationSetting(&base, 1, 0b1110); // Enable one QPU for user programs
+//	qpu_setReservationSetting(&base, 9, 0b0000); // Enable one QPU for user programs
+//	qpu_setReservationSetting(&base, 2, 0b0000); // Enable one QPU for user programs
+//	qpu_setReservationSetting(&base, 1, 0b0000); // Enable one QPU for user programs
+//	qpu_setReservationSetting(&base, 4, 0b0000); // Enable one QPU for user programs
+//	qpu_setReservationSetting(&base, 5, 0b0000); // Enable one QPU for user programs
+//	qpu_setReservationSetting(&base, 1, 0b0000); // Enable one QPU for user programs
+//	qpu_setReservationSetting(&base, 3, 0b0000); // Enable one QPU for user programs
+//	qpu_setReservationSetting(&base, 8, 0b0000); // Enable one QPU for user programs
+//	qpu_setReservationSetting(&base, 5, 0b0000); // Enable one QPU for user programs
+
+//	for (int i = 0; i < 12; i++) // Reserve ALL QPUs for user programs
+//		qpu_setReservationSetting(&base, i, 0b0000);
+
 //	for (int i = 0; i < numInstances; i++) // Reserve used QPUs for user programs
-//		qpu_setReservationSetting(&base, i, 0b1110);
+//		qpu_setReservationSetting(&base, i, 0b0000);
 //	for (int i = numInstances; i < 12; i++) // Exempt unused QPUs from user programs
-//		qpu_setReservationSetting(&base, i, 0b0001);
+//		qpu_setReservationSetting(&base, i, 0b0111);
 	qpu_logReservationSettings(&base);
 	// Setup performance monitoring
 	qpu_setupPerformanceCounters(&base, &perfState);
@@ -404,6 +430,9 @@ error_gcs:
 		printf("-- QPU Disable failed --\n");
 	else
 		printf("-- QPU Disabled --\n");
+
+	for (int i = 0; i < 12; i++) // Reset all QPUs to be freely sheduled
+		qpu_setReservationSetting(&base, i, 0b0000);
 
 error_qpu:
 
