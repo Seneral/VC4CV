@@ -17,6 +17,8 @@
 #define TILED 2			// uniforms and setup for tiled frame processing, e.g. blob detection
 #define BITMSK 3		// uniforms and full frame processing, with bit mask target, e.g. blob detection
 
+#define CAMERA
+
 struct termios terminalSettings;
 static void setConsoleRawMode();
 
@@ -270,6 +272,7 @@ int main(int argc, char **argv)
 	// ---- Setup Camera ----
 
 	// Create GPU camera stream (MMAL camera)
+#ifdef CAMERA
 	gcs = gcs_create(&params);
 	if (gcs == NULL)
 	{
@@ -278,6 +281,23 @@ int main(int argc, char **argv)
 	}
 	gcs_start(gcs);
 	printf("-- Camera Stream started --\n");
+#else
+	QPU_BUFFER camEmulBuf;
+	qpu_allocBuffer(&camEmulBuf, &base, camWidth*camHeight*3, 4096); // Emulating full YUV frame
+	qpu_lockBuffer(&camEmulBuf);
+	{
+		uint8_t *YUVFrameData = (uint8_t*)camEmulBuf.ptr.arm.vptr;
+		for (int x = 0; x < camWidth; x++)
+		{
+			for (int y = 0; y < camHeight; y++)
+			{
+				// Write test data in Y component (UV are after this, but are not used)
+				YUVFrameData[y*camWidth + x] = x/8 + y%8;
+			}
+		}
+	}
+	qpu_unlockBuffer(&camEmulBuf);
+#endif
 
 	// ---- Start Loop ----
 
@@ -287,13 +307,19 @@ int main(int argc, char **argv)
 	lastTime = startTime = std::chrono::high_resolution_clock::now();
 	while (numFrames < maxNumFrames)
 	{
+#ifdef CAMERA
 		// Get most recent MMAL buffer from camera
 		void *cameraBufferHeader = gcs_requestFrameBuffer(gcs);
 		if (!cameraBufferHeader) printf("GCS returned NULL frame! \n");
 		else
+#else
+		// Emulate framerate
+		usleep(std::max(0,(int)(1.0f/camFPS*1000*1000)-4000));
+#endif
 		{
 			// ---- Camera Frame Access ----
 
+#ifdef CAMERA
 			// Source: https://www.raspberrypi.org/forums/viewtopic.php?f=43&t=167652
 			// Get buffer data from opaque buffer handle
 			void *cameraBuffer = gcs_getFrameBufferData(cameraBufferHeader);
@@ -303,6 +329,10 @@ int main(int argc, char **argv)
 			uint32_t cameraBufferPtr = mem_lock(base.mb, cameraBufferHandle);
 			// Unlock VCSM buffer (no need to keep locked, VC-space adress won't change)
 			mem_unlock(base.mb, cameraBufferHandle);
+#else
+			qpu_lockBuffer(&camEmulBuf);
+			uint32_t cameraBufferPtr = camEmulBuf.ptr.vc;
+#endif
 
 			// ---- Uniform preparation ----
 
@@ -339,8 +369,13 @@ int main(int argc, char **argv)
 			// Log errors occurred during execution
 			qpu_logErrors(&base);
 
+#ifdef CAMERA
 			// Return camera buffer to camera
 			gcs_returnFrameBuffer(gcs);
+#else
+			qpu_unlockBuffer(&camEmulBuf);
+#endif
+
 
 			// ---- Debugging and Statistics ----
 
@@ -419,9 +454,11 @@ int main(int argc, char **argv)
 		}
 	}
 
+#ifdef CAMERA
 	gcs_stop(gcs);
 	gcs_destroy(gcs);
 	printf("-- Camera Stream stopped --\n");
+#endif
 
 error_gcs:
 
