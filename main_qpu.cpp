@@ -458,7 +458,10 @@ int main(int argc, char **argv)
 	gcs_stop(gcs);
 	gcs_destroy(gcs);
 	printf("-- Camera Stream stopped --\n");
+#else
+	qpu_releaseBuffer(&camEmulBuf);
 #endif
+
 
 error_gcs:
 
