@@ -65,14 +65,18 @@ int qpu_executeProgramDirect (QPU_PROGRAM *program, QPU_BASE *base, int numInst,
 	base->peripherals[V3D_DBQITE] = 0; // Disable IRQ
 	base->peripherals[V3D_DBQITC] = -1; // Resets IRQ flags
 
+	// Clear caches - L2, TMU, uniforms, instructions
 	base->peripherals[V3D_L2CACTL] = (1<<2); // Clear L2 cache
-	base->peripherals[V3D_SLCACTL] = -1; // Clear other caches
+	base->peripherals[V3D_SLCACTL] = 0b1111<<24 | 0b1111<<16 | 0b1111<<8 | 0b1111<<0;
 
 	// Note QPU user program numbers to determine when all our instances finished
 	int qpuQueued = (base->peripherals[V3D_SRQCS] & 0b111111);
 	int qpuFinished = (base->peripherals[V3D_SRQCS] >> 16) & 0xFF;
 	int qpuWaitCount = (qpuQueued + qpuFinished + numInst) % 256;
 	//base->peripheral[V3D_SRQCS] = (1<<7) | (1<<8) | (1<<16); // Reset error bit and counts
+
+	if (qpuWaitCount < qpuFinished)
+		printf("QPU executing %d programs; waiting for %d with %d queued and %d already finished! \n", numInst, qpuWaitCount, qpuQueued, qpuFinished);
 
 	if (perfState != NULL)
 		perfState->qpusUsed = numInst;
@@ -84,14 +88,14 @@ int qpu_executeProgramDirect (QPU_PROGRAM *program, QPU_BASE *base, int numInst,
 		while((base->peripherals[V3D_SRQCS] & 0b111111) == 16)
 		{
 			cnt++;
-			if (cnt % 100000 == 0)
+			if (cnt % 10000 == 0)
 			{
 				qpu_logErrors(base);
 //				qpu_logStalls(base);
 			}
-			if (cnt % 100000 == 0 && perfState != NULL)
+			if (cnt % 10000 == 0 && perfState != NULL)
 				qpu_updatePerformance(base, perfState);
-			if (cnt % 1000000 == 0)
+			if (cnt % 100000 == 0)
 			{
 				printf("QPU stalled - queued %d / %d! \n", q, numInst);
 				if (perfState != NULL) qpu_logPerformance(perfState);
