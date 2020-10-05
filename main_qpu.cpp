@@ -13,7 +13,7 @@
 #include "user-vcsm.h" // for vcsm_vc_hdl_from_ptr
 
 #define DEFAULT 0		// source and target butter uniforms only
-#define FULL_FRAME 1 	// uniforms for full frame processing, e.g. blit
+#define FULL_FRAME 1		// uniforms for full frame processing, e.g. blit
 #define TILED 2			// uniforms and setup for tiled frame processing, e.g. blob detection
 #define BITMSK 3		// uniforms and full frame processing, with bit mask target, e.g. blob detection
 
@@ -29,7 +29,7 @@ int main(int argc, char **argv)
 	// ---- Read arguments ----
 
 	GCS_CameraParams params = {
-		.mmalEnc = 	MMAL_ENCODING_I420,
+		.mmalEnc = MMAL_ENCODING_I420,
 		.width = (uint16_t)camWidth,
 		.height = (uint16_t)camHeight,
 		.fps = (uint16_t)camFPS,
@@ -103,6 +103,9 @@ int main(int argc, char **argv)
 	QPU_UserProgramInfo upInfo;
 	// MMAL Camera
 	GCS *gcs;
+	// Camera emulation buffers
+	const int emulBufCnt = 4;
+	QPU_BUFFER camEmulBuf[emulBufCnt];
 	// Frame Counter
 	auto startTime = std::chrono::high_resolution_clock::now();
 	auto lastTime = startTime;
@@ -282,21 +285,21 @@ int main(int argc, char **argv)
 	gcs_start(gcs);
 	printf("-- Camera Stream started --\n");
 #else
-	QPU_BUFFER camEmulBuf;
-	qpu_allocBuffer(&camEmulBuf, &base, camWidth*camHeight*3, 4096); // Emulating full YUV frame
-	qpu_lockBuffer(&camEmulBuf);
+	for (int i = 0; i < emulBufCnt; i++)
 	{
-		uint8_t *YUVFrameData = (uint8_t*)camEmulBuf.ptr.arm.vptr;
+		qpu_allocBuffer(&camEmulBuf[i], &base, camWidth*camHeight*3, 4096); // Emulating full YUV frame
+		qpu_lockBuffer(&camEmulBuf[i]);
+		uint8_t *YUVFrameData = (uint8_t*)camEmulBuf[i].ptr.arm.vptr;
 		for (int x = 0; x < camWidth; x++)
 		{
 			for (int y = 0; y < camHeight; y++)
 			{
 				// Write test data in Y component (UV are after this, but are not used)
-				YUVFrameData[y*camWidth + x] = x/8 + y%8;
+				YUVFrameData[y*camWidth + x] = ((x+camWidth/(i+1))*255/camWidth)%256 + ((y+camHeight/(i+1))*255/camHeight)%256;
 			}
 		}
+		qpu_unlockBuffer(&camEmulBuf[i]);
 	}
-	qpu_unlockBuffer(&camEmulBuf);
 #endif
 
 	// ---- Start Loop ----
@@ -327,11 +330,9 @@ int main(int argc, char **argv)
 			uint32_t cameraBufferHandle = vcsm_vc_hdl_from_ptr(cameraBuffer);
 			// Lock VCSM buffer to get VC-space address
 			uint32_t cameraBufferPtr = mem_lock(base.mb, cameraBufferHandle);
-			// Unlock VCSM buffer (no need to keep locked, VC-space adress won't change)
-			mem_unlock(base.mb, cameraBufferHandle);
 #else
-			qpu_lockBuffer(&camEmulBuf);
-			uint32_t cameraBufferPtr = camEmulBuf.ptr.vc;
+			qpu_lockBuffer(&camEmulBuf[numFrames%emulBufCnt]);
+			uint32_t cameraBufferPtr = camEmulBuf[numFrames%emulBufCnt].ptr.vc;
 #endif
 
 			// ---- Uniform preparation ----
@@ -352,29 +353,42 @@ int main(int argc, char **argv)
 
 			// ---- Program execution ----
 
+/*			if (mode == BITMSK)
+				qpu_lockBuffer(&bitmskBuffer);
+			else if (!drawToFrameBuffer)
+				qpu_lockBuffer(&targetBuffer);
+*/
 			// Execute programs
+			int result;
 			if (mode == TILED)
 			{ // Execute numInstances programs each with their own set of uniforms
-				qpu_executeProgramDirect(&program, &base, numInstances, 6, 6, &perfState);
-				// Uncomment to execute only one program each frame, one after another
-//				program.progmem.uniforms.vc += 6*4*(numFrames%numInstances);
-//				qpu_executeProgramDirect(&program, &base, 1, 6, 6, &perfState);
-//				program.progmem.uniforms.vc -= 6*4*(numFrames%numInstances);
+				result = qpu_executeProgramDirect(&program, &base, numInstances, 6, 6, &perfState);
 			}
 			else
 			{ // Execute single program handling full frame
-				qpu_executeProgramDirect(&program, &base, 1, program.progmem.uniformsSize, 0, &perfState);
+				result = qpu_executeProgramDirect(&program, &base, 1, program.progmem.uniformsSize, 0, &perfState);
 			}
 
 			// Log errors occurred during execution
 			qpu_logErrors(&base);
 
 #ifdef CAMERA
+			// Unlock VCSM buffer (no need to keep locked, VC-space adress won't change)
+			mem_unlock(base.mb, cameraBufferHandle);
 			// Return camera buffer to camera
 			gcs_returnFrameBuffer(gcs);
 #else
-			qpu_unlockBuffer(&camEmulBuf);
+			qpu_unlockBuffer(&camEmulBuf[numFrames%emulBufCnt]);
 #endif
+
+/*			// Unlock target buffers
+			if (mode == BITMSK)
+				qpu_unlockBuffer(&bitmskBuffer);
+			else if (!drawToFrameBuffer)
+				qpu_unlockBuffer(&targetBuffer);
+*/
+			if (result != 0)
+				break;
 
 
 			// ---- Debugging and Statistics ----
@@ -459,7 +473,8 @@ int main(int argc, char **argv)
 	gcs_destroy(gcs);
 	printf("-- Camera Stream stopped --\n");
 #else
-	qpu_releaseBuffer(&camEmulBuf);
+	for (int i = 0; i < emulBufCnt; i++)
+		qpu_releaseBuffer(&camEmulBuf[i]);
 #endif
 
 

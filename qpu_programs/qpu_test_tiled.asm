@@ -9,13 +9,13 @@
 .set lineCount, ra3
 mov srcAddr, unif;
 mov tgtAddr, unif;
-mov srcStride, unif;
-mov tgtStride, unif;
-mov lineWidth, unif;
+mov	srcStride, unif;
+mov	tgtStride, unif;
+mov	lineWidth, unif;
 mov lineCount, unif;
 
 # Variables
-.set y, ra4		# Iterator over all lines
+.set y, ra4			# Iterator over all lines
 .set srcPtr, ra5
 .set tgtPtr, ra6
 .set vpmSetup, rb2
@@ -31,6 +31,9 @@ ldi num16, 16;
 ldi num32, 32;
 
 # TODO: Generate vector mask to allow for any multiple of 8-wide columns (not just 16x8)
+
+# ------- Block 0 Start
+#or.setf nop, mutex, nop;
 
 # Create VPM Setup
 ldi r0, vpm_setup(0, 1, h32(0));
@@ -60,13 +63,94 @@ max y, lineCount, 1;
 
 :y # Loop over lines
 
+# 	------- Block 1 Start -----
+#	or.setf nop, mutex, nop;
+
 	.rep px, 2
 
 		# Initiate VPM write and make sure last VDW finished
 		read vw_wait;
 		mov vw_setup, vpmSetup;
 
-		# Read TMU
+	.if 0 # --- Code 1
+		# Normal debug code. Always works, without mutex or whatever configuration
+		# So VPM access should not be problematic
+
+		 # Constant Alpha
+		mov ra17.8dsi, 255;
+		# Element number (1-16) in Red
+		mul24 ra17.8csi, elem_num, num16;
+		# Constant 0 green
+		mov ra17.8bsi, 0;
+		# QPU number in Blue
+		ldi r0, 21;
+		mul24 ra17.8asi, qpu_num, r0;
+		nop;
+
+		# Write to VPM
+		mov vpm, ra17;
+		mov vpm, ra17;
+		mov vpm, ra17;
+		mov vpm, ra17;
+
+	.endif
+
+	.if 0 # --- Code 2
+		# Simple TMU Test code
+
+		mov t0s, srcPtr;
+		ldtmu0
+		mov ra18, r4;
+
+	.endif
+
+	.if 0 # --- Code 3
+		# TMU Test code with mutex
+
+		read mutex;
+
+		mov t0s, srcPtr;
+		ldtmu0
+		mov ra18, r4;
+
+		mov mutex, 0;
+
+	.endif
+
+	.if 0 # --- Code 4
+		# TMU read to r0
+		mov t0s, srcPtr;
+		ldtmu0
+
+		mov r0, r4;
+
+		# Write to VPM
+		fmul vpm.8888, r0, 1.0; # using mul encoding
+		fmul vpm.8888, r0, 1.0; # using mul encoding
+		fmul vpm.8888, r0, 1.0; # using mul encoding
+		fmul vpm.8888, r0, 1.0; # using mul encoding
+
+	.endif
+
+	.if 0 # --- Code 5
+		# TMU read to r0 with nop; afterwards
+		mov t0s, srcPtr;
+		ldtmu0
+
+		mov r0, r4;
+		nop;
+
+		# Write to VPM
+		fmul vpm.8888, r0, 1.0; # using mul encoding
+		fmul vpm.8888, r0, 1.0; # using mul encoding
+		fmul vpm.8888, r0, 1.0; # using mul encoding
+		fmul vpm.8888, r0, 1.0; # using mul encoding
+
+	.endif
+
+	.if 1 # --- Code 6
+		# Normal TMU camera write (works if executed one after another
+
 		mov t0s, srcPtr;
 		ldtmu0
 
@@ -82,6 +166,8 @@ max y, lineCount, 1;
 		fmul vpm.8888, ra22, 1.0; # using mul encoding
 		fmul vpm.8888, ra23, 1.0; # using mul encoding
 
+	.endif
+
 		# Initiate VDW from VPM to memory
 		mov vw_setup, vdwSetup;
 		mov vw_setup, vdwStride;
@@ -89,12 +175,17 @@ max y, lineCount, 1;
 
 		# Increase address
 		add srcPtr, srcPtr, 4;
+#	nop;
 		add tgtPtr, tgtPtr, num16;
+#	nop;
 
 		# Make sure to finish VDW
 #		read vw_wait;
 
 	.endr
+
+# 	------- Block 1 End
+#	or.setf mutex, nop, nop;
 
 	# Increase adresses to next line
 	add srcPtr, srcPtr, srcStride;
@@ -106,6 +197,9 @@ max y, lineCount, 1;
 	nop
 	nop
 	nop
+
+# ------- Block 0 End
+#or.setf mutex, nop, nop;
 
 mov.setf irq, nop;
 
