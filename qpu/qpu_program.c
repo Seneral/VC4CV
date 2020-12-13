@@ -75,8 +75,8 @@ int qpu_executeProgramDirect (QPU_PROGRAM *program, QPU_BASE *base, int numInst,
 	int qpuWaitCount = (qpuQueued + qpuFinished + numInst) % 256;
 	//base->peripheral[V3D_SRQCS] = (1<<7) | (1<<8) | (1<<16); // Reset error bit and counts
 
-	if (qpuWaitCount < qpuFinished)
-		printf("QPU executing %d programs; waiting for %d with %d queued and %d already finished! \n", numInst, qpuWaitCount, qpuQueued, qpuFinished);
+//	if (qpuWaitCount < qpuFinished)
+//		printf("QPU executing %d programs; waiting for %d with %d queued and %d already finished! \n", numInst, qpuWaitCount, qpuQueued, qpuFinished);
 
 	if (perfState != NULL)
 		perfState->qpusUsed = numInst;
