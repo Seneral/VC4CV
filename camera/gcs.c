@@ -90,30 +90,36 @@ GCS *gcs_create(const GCS_CameraParams *cameraParams)
 	CHECK_STATUS_M(mstatus, "Failed to create camera", error_cameraCreate);
 
 	// Mess with the ISP blocks
-	uint32_t disableISPBits = 0;
-//	disableISPBits |= (1 << 2); // Black Level Compensation
-//	disableISPBits |= (1 << 3); // Lens Shading
-//	disableISPBits |= (1 << 5); // White Balance Gain
-//	disableISPBits |= (1 << 7); // Defective Pixel Correction
-//	disableISPBits |= (1 << 9); // Crosstalk
-//	disableISPBits |= (1 << 18); // Gamma
-//	disableISPBits |= (1 << 22); // Sharpening
-	mmal_port_parameter_set_uint32(gcs->camera->control, MMAL_PARAMETER_CAMERA_ISP_BLOCK_OVERRIDE, ~disableISPBits);
+	// https://www.raspberrypi.org/forums/viewtopic.php?f=43&t=175711
+	mmal_port_parameter_set_uint32(gcs->camera->control, MMAL_PARAMETER_CAMERA_ISP_BLOCK_OVERRIDE, ~cameraParams->disableISPBlocks);
 
 	// Enable MMAL camera component
 	mstatus = mmal_component_enable(gcs->camera);
 	CHECK_STATUS_M(mstatus, "Failed to enable camera", error_cameraEnable);
 
 	// Set camera parameters (See mmal_parameters_camera.h)
-//	MMAL_PARAMETER_EXPOSUREMODE_T expMode;
-//	expMode.hdr.id = MMAL_PARAMETER_EXPOSURE_MODE;
-//	expMode.hdr.size = sizeof(MMAL_PARAMETER_EXPOSUREMODE_T);
-//	expMode.value = MMAL_PARAM_EXPOSUREMODE_OFF;
-//	mmal_port_parameter_set(gcs->camera->control, &expMode.hdr);
-	if (gcs->cameraParams.shutterSpeed != 0) mmal_port_parameter_set_uint32(gcs->camera->control, MMAL_PARAMETER_SHUTTER_SPEED, gcs->cameraParams.shutterSpeed);
-	if (gcs->cameraParams.iso >= 0) mmal_port_parameter_set_uint32(gcs->camera->control, MMAL_PARAMETER_ISO, (uint32_t)gcs->cameraParams.iso);
-//	MMAL_PARAMETER_AWBMODE_T awbMode = { {MMAL_PARAMETER_AWB_MODE,sizeof(awbMode)}, MMAL_PARAM_AWBMODE_SUNLIGHT };
-//	mmal_port_parameter_set(gcs->camera->control, &awbMode.hdr);
+	if (gcs->cameraParams.shutterSpeed != 0)
+		mmal_port_parameter_set_uint32(gcs->camera->control, MMAL_PARAMETER_SHUTTER_SPEED, gcs->cameraParams.shutterSpeed);
+	if (gcs->cameraParams.iso != 0)
+		mmal_port_parameter_set_uint32(gcs->camera->control, MMAL_PARAMETER_ISO, (uint32_t)gcs->cameraParams.iso);
+	if (gcs->cameraParams.disableEXP)
+	{ // Fix Exposure to set ISO value
+		MMAL_PARAMETER_EXPOSUREMODE_T expMode;
+		expMode.hdr.id = MMAL_PARAMETER_EXPOSURE_MODE;
+		expMode.hdr.size = sizeof(MMAL_PARAMETER_EXPOSUREMODE_T);
+		expMode.value = MMAL_PARAM_EXPOSUREMODE_OFF;
+		mmal_port_parameter_set(gcs->camera->control, &expMode.hdr);
+		int expComp = 0;
+		mmal_port_parameter_set_int32(gcs->camera->control, MMAL_PARAMETER_EXPOSURE_COMP, expComp);
+
+	}
+	if (gcs->cameraParams.disableAWB)
+	{ // Fix AWB to constant 1,1 gain
+		MMAL_PARAMETER_AWBMODE_T awbMode = { { MMAL_PARAMETER_AWB_MODE, sizeof(awbMode) }, MMAL_PARAM_AWBMODE_SUNLIGHT };
+		mmal_port_parameter_set(gcs->camera->control, &awbMode.hdr);
+		MMAL_PARAMETER_AWB_GAINS_T awbGains = { { MMAL_PARAMETER_CUSTOM_AWB_GAINS, sizeof(awbGains) }, { 1, 1 }, { 1, 1 }};
+		mmal_port_parameter_set(gcs->camera->control, &awbGains.hdr);
+	}
 	// Enable MMAL camera port
 	gcs->camera->control->userdata = (struct MMAL_PORT_USERDATA_T *)gcs;
 	mstatus = mmal_port_enable(gcs->camera->control, gcs_onCameraControl);
@@ -269,6 +275,11 @@ void* gcs_requestFrameBuffer(GCS *gcs)
 	}
 	gcs->processingFrameBuffer = gcs->curFrameBuffer;
 	gcs->curFrameBuffer = NULL;
+	if (!gcs->processingFrameBuffer)
+	{ // Not cleaned up last frame
+		LOG_ERROR("No current frame buffer!");
+		return NULL;
+	}
 	return gcs->processingFrameBuffer;
 }
 

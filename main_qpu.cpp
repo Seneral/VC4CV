@@ -17,12 +17,13 @@
 #define TILED 2			// uniforms and setup for tiled frame processing, e.g. blob detection
 #define BITMSK 3		// uniforms and full frame processing, with bit mask target, e.g. blob detection
 
-#define CAMERA
+#define RUN_CAMERA	// Have the camera supply frames
+			// EITHER use emulated buffers with debug content (default)
+#define USE_CAMERA	// OR use camera frames directly in QPU program
+//#define CPY_CAMERA	// OR copy copy frames into emulated buffers
 
 struct termios terminalSettings;
 static void setConsoleRawMode();
-
-uint32_t camWidth = 1280, camHeight = 720, camFPS = 30;
 
 int main(int argc, char **argv)
 {
@@ -30,11 +31,22 @@ int main(int argc, char **argv)
 
 	GCS_CameraParams params = {
 		.mmalEnc = MMAL_ENCODING_I420,
-		.width = (uint16_t)camWidth,
-		.height = (uint16_t)camHeight,
-		.fps = (uint16_t)camFPS,
+		.width = 1280,
+		.height = 720,
+		.fps = 30,
 		.shutterSpeed = 0,
-		.iso = -1
+		.iso = 0,
+		.disableEXP = false,
+		.disableAWB = false,
+		.disableISPBlocks = 0 // https://www.raspberrypi.org/forums/viewtopic.php?f=43&t=175711
+//			  (1<<2) // Black Level Compensation
+//			| (1<<3) // Lens Shading
+//			| (1<<5) // White Balance Gain
+//			| (1<<7) // Defective Pixel Correction
+//			| (1<<9) // Crosstalk
+//			| (1<<18) // Gamma
+//			| (1<<22) // Sharpening
+//			| (1<<24) // Some Color Conversion
 	};
 	char codeFile[64];
 	uint32_t maxNumFrames = -1; // Enough to run for years
@@ -43,7 +55,7 @@ int main(int argc, char **argv)
 	bool enableQPU[12];
 
 	int arg;
-	while ((arg = getopt(argc, argv, "c:w:h:f:s:i:m:o:t:dq:")) != -1)
+	while ((arg = getopt(argc, argv, "c:w:h:f:s:i:m:o:t:da:e:q:")) != -1)
 	{
 		switch (arg)
 		{
@@ -51,13 +63,13 @@ int main(int argc, char **argv)
 				strncpy(codeFile, optarg, sizeof(codeFile));
 				break;
 			case 'w':
-				params.width = camWidth = std::stoi(optarg);
+				params.width = std::stoi(optarg);
 				break;
 			case 'h':
-				params.height = camHeight = std::stoi(optarg);
+				params.height = std::stoi(optarg);
 				break;
 			case 'f':
-				params.fps = camFPS = std::stoi(optarg);
+				params.fps = std::stoi(optarg);
 				break;
 			case 's':
 				params.shutterSpeed = std::stoi(optarg);
@@ -77,11 +89,15 @@ int main(int argc, char **argv)
 			case 'd':
 				drawToFrameBuffer = true;
 				break;
+			case 'e':
+				params.disableAWB = true;
+				break;
+			case 'x':
+				params.disableEXP = true;
+				break;
 			case 'q':
 				for (int i = 0; i < 12 && i < strlen(optarg); i++)
-				{
 					enableQPU[i] = optarg[i] == '1';
-				}
 			default:
 				printf("Usage: %s -c codefile [-w width] [-h height] [-f fps] [-s shutter-speed-ns] [-i iso] [-m mode (full, tiled, bitmsk)] [-d display-to-fb] [-t max-num-frames]\n", argv[0]);
 				break;
@@ -125,7 +141,7 @@ int main(int argc, char **argv)
 	// ---- Setup target buffer ----
 
 	uint32_t tgtBufferPtr, tgtStride;
-	uint32_t lineWidth = camWidth, lineCount = camHeight;
+	uint32_t lineWidth = params.width, lineCount = params.height;
 	int fbfd = 0;
 	struct fb_var_screeninfo orig_vinfo;
 	struct fb_var_screeninfo vinfo;
@@ -138,21 +154,25 @@ int main(int argc, char **argv)
 		{
 			tgtStride = finfo.line_length;
 			tgtBufferPtr = finfo.smem_start;
-			lineWidth = std::min(camWidth, vinfo.xres);
-			lineCount = std::min(camHeight, vinfo.yres);
+			if (lineWidth > vinfo.xres || lineCount > vinfo.yres)
+			{
+				lineWidth = std::min(lineWidth, vinfo.xres);
+				lineCount = std::min(lineCount, vinfo.yres);
+				printf("Limiting resolution to screen while -d is enabled! %dx%d \n", lineWidth, lineCount);
+			}
 		}
 	}
 	if (!drawToFrameBuffer)
 	{ // Allocate buffer to render into
-		qpu_allocBuffer(&targetBuffer, &base, camWidth*camHeight*4, 4096);
-		tgtStride = camWidth*4;
+		qpu_allocBuffer(&targetBuffer, &base, params.width*params.height*4, 4096);
+		tgtStride = params.width*4;
 		tgtBufferPtr = targetBuffer.ptr.vc;
 	}
 	if (mode == BITMSK)
 	{ // Set up bit target, one bit per pixel
 		// Width and height must be multiple of 32 and 16 respectively
-		lineWidth = (uint32_t)std::floor((float)camWidth/8/4)*8*4;
-		lineCount = (uint32_t)std::floor((float)camHeight/16)*16;
+		lineWidth = (uint32_t)std::floor((float)params.width/8/4)*8*4;
+		lineCount = (uint32_t)std::floor((float)params.height/16)*16;
 		qpu_allocBuffer(&bitmskBuffer, &base, lineWidth/8*lineCount, 4096);
 		tgtStride = lineWidth/8;
 		tgtBufferPtr = bitmskBuffer.ptr.vc;
@@ -204,7 +224,7 @@ int main(int argc, char **argv)
 	{ // Set up one program to handle the full frame
 		program.progmem.uniforms.arm.uptr[0] = 0; // Enter source pointer each frame
 		program.progmem.uniforms.arm.uptr[1] = tgtBufferPtr;
-		program.progmem.uniforms.arm.uptr[2] = camWidth; // Source stride
+		program.progmem.uniforms.arm.uptr[2] = params.width; // Source stride
 		program.progmem.uniforms.arm.uptr[3] = tgtStride;
 		program.progmem.uniforms.arm.uptr[4] = lineWidth;
 		program.progmem.uniforms.arm.uptr[5] = lineCount;
@@ -217,7 +237,7 @@ int main(int argc, char **argv)
 			{
 				program.progmem.uniforms.arm.uptr[c*splitCols*6 + r*6 + 0] = 0; // Enter source pointer each frame
 				program.progmem.uniforms.arm.uptr[c*splitCols*6 + r*6 + 1] = tgtBufferPtr + c*4*8*16 + r*lineCount/splitCols*tgtStride;
-				program.progmem.uniforms.arm.uptr[c*splitCols*6 + r*6 + 2] = camWidth; // Source stride
+				program.progmem.uniforms.arm.uptr[c*splitCols*6 + r*6 + 2] = params.width; // Source stride
 				program.progmem.uniforms.arm.uptr[c*splitCols*6 + r*6 + 3] = tgtStride;
 				program.progmem.uniforms.arm.uptr[c*splitCols*6 + r*6 + 4] = 8*16; // 16 elements working on 8-pixel columns each
 				program.progmem.uniforms.arm.uptr[c*splitCols*6 + r*6 + 5] = lineCount / splitCols;
@@ -245,27 +265,10 @@ int main(int argc, char **argv)
 	// QPU scheduler reservation
 //	for (int i = 0; i < 12; i++) // Reset all QPUs to be freely sheduled
 //		qpu_setReservationSetting(&base, i, 0b0000);
-
-	for (int i = 0; i < 12; i++) // Disable ALL QPUs
-		qpu_setReservationSetting(&base, i, 0b0001);
+//	for (int i = 0; i < 12; i++) // Disable ALL QPUs
+//		qpu_setReservationSetting(&base, i, 0b0001);
 	for (int i = 0; i < 12; i++) // Enable only QPUs selected as parameter
 		qpu_setReservationSetting(&base, i, enableQPU[i]? 0b1110 : 0b1111);
-//	qpu_setReservationSetting(&base, 1, 0b1110); // Enable one QPU for user programs
-//	qpu_setReservationSetting(&base, 9, 0b0000); // Enable one QPU for user programs
-//	qpu_setReservationSetting(&base, 2, 0b0000); // Enable one QPU for user programs
-//	qpu_setReservationSetting(&base, 1, 0b0000); // Enable one QPU for user programs
-//	qpu_setReservationSetting(&base, 4, 0b0000); // Enable one QPU for user programs
-//	qpu_setReservationSetting(&base, 5, 0b0000); // Enable one QPU for user programs
-//	qpu_setReservationSetting(&base, 1, 0b0000); // Enable one QPU for user programs
-//	qpu_setReservationSetting(&base, 3, 0b0000); // Enable one QPU for user programs
-//	qpu_setReservationSetting(&base, 8, 0b0000); // Enable one QPU for user programs
-//	qpu_setReservationSetting(&base, 5, 0b0000); // Enable one QPU for user programs
-
-//	for (int i = 0; i < 12; i++) // Reserve ALL QPUs for user programs
-//		qpu_setReservationSetting(&base, i, 0b0000);
-
-//	for (int i = 0; i < numInstances; i++) // Reserve used QPUs for user programs
-//		qpu_setReservationSetting(&base, i, 0b0000);
 //	for (int i = numInstances; i < 12; i++) // Exempt unused QPUs from user programs
 //		qpu_setReservationSetting(&base, i, 0b0111);
 	qpu_logReservationSettings(&base);
@@ -275,7 +278,7 @@ int main(int argc, char **argv)
 	// ---- Setup Camera ----
 
 	// Create GPU camera stream (MMAL camera)
-#ifdef CAMERA
+#ifdef RUN_CAMERA
 	gcs = gcs_create(&params);
 	if (gcs == NULL)
 	{
@@ -284,18 +287,19 @@ int main(int argc, char **argv)
 	}
 	gcs_start(gcs);
 	printf("-- Camera Stream started --\n");
-#else
+#endif
+#ifndef USE_CAMERA
 	for (int i = 0; i < emulBufCnt; i++)
 	{
-		qpu_allocBuffer(&camEmulBuf[i], &base, camWidth*camHeight*3, 4096); // Emulating full YUV frame
+		qpu_allocBuffer(&camEmulBuf[i], &base, params.width*params.height*3, 4096); // Emulating full YUV frame
 		qpu_lockBuffer(&camEmulBuf[i]);
 		uint8_t *YUVFrameData = (uint8_t*)camEmulBuf[i].ptr.arm.vptr;
-		for (int x = 0; x < camWidth; x++)
+		for (int y = 0; y < params.height; y++)
 		{
-			for (int y = 0; y < camHeight; y++)
+			for (int x = 0; x < params.width; x++)
 			{
 				// Write test data in Y component (UV are after this, but are not used)
-				YUVFrameData[y*camWidth + x] = ((x+camWidth/(i+1))*255/camWidth)%256 + ((y+camHeight/(i+1))*255/camHeight)%256;
+				YUVFrameData[y*params.width + x] = ((x+params.width/(i+1))*255/params.width)%256 + ((y+params.height/(i+1))*255/params.height)%256;
 			}
 		}
 		qpu_unlockBuffer(&camEmulBuf[i]);
@@ -310,30 +314,60 @@ int main(int argc, char **argv)
 	lastTime = startTime = std::chrono::high_resolution_clock::now();
 	while (numFrames < maxNumFrames)
 	{
-#ifdef CAMERA
+#ifdef RUN_CAMERA
 		// Get most recent MMAL buffer from camera
 		void *cameraBufferHeader = gcs_requestFrameBuffer(gcs);
 		if (!cameraBufferHeader) printf("GCS returned NULL frame! \n");
 		else
 #else
 		// Emulate framerate
-		usleep(std::max(0,(int)(1.0f/camFPS*1000*1000)-4000));
+		usleep(std::max(0,(int)(1.0f/params.fps*1000*1000)-4000));
 #endif
 		{
 			// ---- Camera Frame Access ----
 
-#ifdef CAMERA
-			// Source: https://www.raspberrypi.org/forums/viewtopic.php?f=43&t=167652
+#ifdef RUN_CAMERA
 			// Get buffer data from opaque buffer handle
 			void *cameraBuffer = gcs_getFrameBufferData(cameraBufferHeader);
+			// Source: https://www.raspberrypi.org/forums/viewtopic.php?f=43&t=167652
 			// Get VCSM Handle of frameBuffer (works only if zero-copy is enabled, so buffer is in VCSM)
 			uint32_t cameraBufferHandle = vcsm_vc_hdl_from_ptr(cameraBuffer);
+	#ifndef USE_CAMERA
 			// Lock VCSM buffer to get VC-space address
+			mem_lock(base.mb, cameraBufferHandle);
+
+		#ifdef CPY_CAMERA
+			int i = (numFrames)%emulBufCnt;
+			qpu_lockBuffer(&camEmulBuf[i]);
+			uint8_t *srcCameraFrame = (uint8_t*)cameraBuffer;
+			uint8_t *YUVFrameData = (uint8_t*)camEmulBuf[i].ptr.arm.vptr;
+			for (int y = 0; y < params.height; y++)
+			{
+				for (int x = 0; x < params.width; x++)
+				{
+					// Write test data in Y component (UV are after this, but are not used)
+					YUVFrameData[y*params.width + x] = srcCameraFrame[y*params.width+x];
+				}
+			}
+			qpu_unlockBuffer(&camEmulBuf[i]);
+		#endif
+
+	#endif
+#endif
+#ifdef USE_CAMERA
 			uint32_t cameraBufferPtr = mem_lock(base.mb, cameraBufferHandle);
 #else
 			qpu_lockBuffer(&camEmulBuf[numFrames%emulBufCnt]);
 			uint32_t cameraBufferPtr = camEmulBuf[numFrames%emulBufCnt].ptr.vc;
 #endif
+#ifdef RUN_CAMERA
+			// Unlock VCSM buffer (no need to keep locked, VC-space adress won't change)
+//			mem_unlock(base.mb, cameraBufferHandle);
+			// Return camera buffer to camera
+//			gcs_returnFrameBuffer(gcs);
+#endif
+
+//			usleep(10000);
 
 			// ---- Uniform preparation ----
 
@@ -343,7 +377,7 @@ int main(int argc, char **argv)
 			{ // Set up individual source pointer for each program instance
 				for (int c = 0; c < numProgCols; c++)
 					for (int r = 0; r < splitCols; r++)
-						program.progmem.uniforms.arm.uptr[c*splitCols*6 + r*6 + 0] = cameraBufferPtr + c*8*16 + r*lineCount/splitCols*camWidth;
+						program.progmem.uniforms.arm.uptr[c*splitCols*6 + r*6 + 0] = cameraBufferPtr + c*8*16 + r*lineCount/splitCols*params.width;
 			}
 			else
 			{
@@ -372,13 +406,15 @@ int main(int argc, char **argv)
 			// Log errors occurred during execution
 			qpu_logErrors(&base);
 
-#ifdef CAMERA
+#ifdef USE_CAMERA
+#else
+			qpu_unlockBuffer(&camEmulBuf[numFrames%emulBufCnt]);
+#endif
+#ifdef RUN_CAMERA
 			// Unlock VCSM buffer (no need to keep locked, VC-space adress won't change)
 			mem_unlock(base.mb, cameraBufferHandle);
 			// Return camera buffer to camera
 			gcs_returnFrameBuffer(gcs);
-#else
-			qpu_unlockBuffer(&camEmulBuf[numFrames%emulBufCnt]);
 #endif
 
 /*			// Unlock target buffers
@@ -388,8 +424,10 @@ int main(int argc, char **argv)
 				qpu_unlockBuffer(&targetBuffer);
 */
 			if (result != 0)
+			{
+				printf("Encountered an error after %d frames!\n", numFrames);
 				break;
-
+			}
 
 			// ---- Debugging and Statistics ----
 
@@ -468,11 +506,12 @@ int main(int argc, char **argv)
 		}
 	}
 
-#ifdef CAMERA
+#ifdef RUN_CAMERA
 	gcs_stop(gcs);
 	gcs_destroy(gcs);
 	printf("-- Camera Stream stopped --\n");
-#else
+#endif
+#ifndef USE_CAMERA
 	for (int i = 0; i < emulBufCnt; i++)
 		qpu_releaseBuffer(&camEmulBuf[i]);
 #endif
