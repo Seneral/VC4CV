@@ -20,8 +20,6 @@ include_directories(/opt/vc/include/interface/vcsm)
 
 include_directories(./camera)
 include_directories(./qpu)
-include_directories(./gl)
-include_directories(./gl_blobs)
 
 link_directories(/opt/vc/lib/)
 
@@ -32,8 +30,6 @@ find_library(LIB_MMAL NAMES mmal HINTS /opt/vc/lib/)
 find_library(LIB_MMAL_CORE NAMES mmal_core HINTS /opt/vc/lib/)
 find_library(LIB_MMAL_UTIL NAMES mmal_util HINTS /opt/vc/lib/)
 find_library(LIB_MMAL_COMP NAMES mmal_components HINTS /opt/vc/lib/)
-find_library(LIB_BEGL NAMES brcmEGL HINTS /opt/vc/lib/)
-find_library(LIB_GLES NAMES brcmGLESv2 HINTS /opt/vc/lib/)
 
 set(VC4CV_QPU_SOURCES
    camera/gcs.c
@@ -42,32 +38,21 @@ set(VC4CV_QPU_SOURCES
    qpu/qpu_base.c
    qpu/qpu_program.c
    qpu/qpu_info.c)
-set(VC4CV_GL_SOURCES
-   camera/gcs.c
-   camera/camGL.c
-   gl/eglUtil.c
-   gl/mesh.cpp
-   gl/shader.cpp
-   gl/texture.cpp)
 
 set(VC4CV_LIBRARIES
 	m dl pthread
 	${LIB_BCMH} ${LIB_VCOS} ${LIB_VCSM}
 	${LIB_MMAL} ${LIB_MMAL_CORE} ${LIB_MMAL_UTIL} ${LIB_MMAL_COMP})
-set(VC4CV_GL_LIBRARIES
-	${LIB_BEGL} ${LIB_GLES})
+
+add_custom_target(QPU ALL DEPENDS qpu QPUCV QPUMin)
 
 # QPU CV Sample application
-add_executable(QPUCV ${VC4CV_QPU_SOURCES} main_qpu.cpp)
+add_executable(QPUCV ${VC4CV_QPU_SOURCES} main.cpp)
 target_link_libraries(QPUCV ${VC4CV_LIBRARIES})
 
-# GL CV sample application
-add_executable(GLCV ${VC4CV_GL_SOURCES} main_gl.cpp)
-target_link_libraries(GLCV ${VC4CV_LIBRARIES} ${VC4CV_GL_LIBRARIES})
-
-# GL blob tracking application
-add_executable(GLBlobs ${VC4CV_GL_SOURCES} main_gl_blobs.cpp gl_blobs/blobdetection.cpp)
-target_link_libraries(GLBlobs ${VC4CV_LIBRARIES} ${VC4CV_GL_LIBRARIES})
+# QPU CV minimal application for tiled mode with bitmask buffer
+add_executable(QPUMin ${VC4CV_QPU_SOURCES} main_minimal.cpp)
+target_link_libraries(QPUMin ${VC4CV_LIBRARIES})
 
 # Set VC4ASM compiler to compile all asm source files
 set(QPU_SOURCES

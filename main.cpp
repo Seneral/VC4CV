@@ -212,9 +212,9 @@ int main(int argc, char **argv)
 	{
 		printf("SETUP: %d instances processing 1/%d columns each, covering %dx%d tiles, plus %d columns dropped\n",
 			numInstances, splitCols, numProgCols*16, numTileRows, droppedTileCols);
-		lineWidth = lineWidth - 8*droppedTileCols;
-		if (buffer == BITMSK || buffer == BLKMSK)
-			tgtStride = lineWidth/8;
+//		lineWidth = lineWidth - 8*droppedTileCols;
+//		if (buffer == BITMSK || buffer == BLKMSK)
+//			tgtStride = lineWidth/8;
 		printf("4 srcStride: %d, tgtStride: %d, lineWidth: %d \n", srcStride, tgtStride, lineWidth);
 	}
 	else numInstances = 1;
