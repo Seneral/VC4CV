@@ -77,6 +77,7 @@ set(QPU_SOURCES
 	qpu_programs/qpu_blit_full.asm
 	qpu_programs/qpu_blit_tiled.asm
 	qpu_programs/qpu_mask_full.asm
+	qpu_programs/qpu_mask_tiled.asm
 	qpu_programs/qpu_free_mutex.asm
 )
 add_custom_target(qpu)

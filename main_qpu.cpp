@@ -2,6 +2,7 @@
 #include <chrono>
 #include <termios.h>
 #include <math.h>
+#include <algorithm>
 
 #include "fbUtil.h"
 #include "qpu_program.h"
@@ -13,9 +14,12 @@
 #include "user-vcsm.h" // for vcsm_vc_hdl_from_ptr
 
 #define DEFAULT 0		// source and target butter uniforms only
-#define FULL_FRAME 1		// uniforms for full frame processing, e.g. blit
+#define FULL_FRAME 1	// uniforms for full frame processing, e.g. blit
 #define TILED 2			// uniforms and setup for tiled frame processing, e.g. blob detection
-#define BITMSK 3		// uniforms and full frame processing, with bit mask target, e.g. blob detection
+
+#define RGB32 0			// Normal RGB 32Bit buffer (e.g. framebuffer)
+#define BITMSK 1		// Special 1Bit buffer in normal layout
+#define BLKMSK 2		// Special 1Bit buffer in 8x32 block layout
 
 #define RUN_CAMERA	// Have the camera supply frames
 			// EITHER use emulated buffers with debug content (default)
@@ -52,10 +56,11 @@ int main(int argc, char **argv)
 	uint32_t maxNumFrames = -1; // Enough to run for years
 	bool drawToFrameBuffer = false;
 	int mode = FULL_FRAME;
+	int buffer = RGB32;
 	bool enableQPU[12];
 
 	int arg;
-	while ((arg = getopt(argc, argv, "c:w:h:f:s:i:m:o:t:da:e:q:")) != -1)
+	while ((arg = getopt(argc, argv, "c:w:h:f:s:i:m:b:o:t:da:e:q:")) != -1)
 	{
 		switch (arg)
 		{
@@ -80,8 +85,13 @@ int main(int argc, char **argv)
 			case 'm':
 				if (strcmp(optarg, "full") == 0) mode = FULL_FRAME;
 				else if (strcmp(optarg, "tiled") == 0) mode = TILED;
-				else if (strcmp(optarg, "bitmsk") == 0) mode = BITMSK;
 				else mode = DEFAULT;
+				break;
+			case 'b':
+				if (strcmp(optarg, "RGB") == 0) buffer = RGB32;
+				else if (strcmp(optarg, "bitmsk") == 0) buffer = BITMSK;
+				else if (strcmp(optarg, "blkmsk") == 0) buffer = BLKMSK;
+				else buffer = RGB32;
 				break;
 			case 't':
 				maxNumFrames = std::stoi(optarg);
@@ -98,6 +108,7 @@ int main(int argc, char **argv)
 			case 'q':
 				for (int i = 0; i < 12 && i < strlen(optarg); i++)
 					enableQPU[i] = optarg[i] == '1';
+				break;
 			default:
 				printf("Usage: %s -c codefile [-w width] [-h height] [-f fps] [-s shutter-speed-ns] [-i iso] [-m mode (full, tiled, bitmsk)] [-d display-to-fb] [-t max-num-frames]\n", argv[0]);
 				break;
@@ -141,6 +152,7 @@ int main(int argc, char **argv)
 	// ---- Setup target buffer ----
 
 	uint32_t tgtBufferPtr, tgtStride;
+	uint32_t srcStride = params.width;
 	uint32_t lineWidth = params.width, lineCount = params.height;
 	int fbfd = 0;
 	struct fb_var_screeninfo orig_vinfo;
@@ -154,12 +166,13 @@ int main(int argc, char **argv)
 		{
 			tgtStride = finfo.line_length;
 			tgtBufferPtr = finfo.smem_start;
-			if (lineWidth > vinfo.xres || lineCount > vinfo.yres)
+			if ((lineWidth > vinfo.xres || lineCount > vinfo.yres) && buffer == RGB32)
 			{
 				lineWidth = std::min(lineWidth, vinfo.xres);
 				lineCount = std::min(lineCount, vinfo.yres);
 				printf("Limiting resolution to screen while -d is enabled! %dx%d \n", lineWidth, lineCount);
 			}
+			printf("1 srcStride: %d, tgtStride: %d, lineWidth: %d \n", srcStride, tgtStride, lineWidth);
 		}
 	}
 	if (!drawToFrameBuffer)
@@ -167,15 +180,17 @@ int main(int argc, char **argv)
 		qpu_allocBuffer(&targetBuffer, &base, params.width*params.height*4, 4096);
 		tgtStride = params.width*4;
 		tgtBufferPtr = targetBuffer.ptr.vc;
+		printf("2 srcStride: %d, tgtStride: %d, lineWidth: %d \n", srcStride, tgtStride, lineWidth);
 	}
-	if (mode == BITMSK)
+	if (buffer == BITMSK || buffer == BLKMSK)
 	{ // Set up bit target, one bit per pixel
+		qpu_allocBuffer(&bitmskBuffer, &base, lineWidth/8*lineCount, 4096);
 		// Width and height must be multiple of 32 and 16 respectively
 		lineWidth = (uint32_t)std::floor((float)params.width/8/4)*8*4;
 		lineCount = (uint32_t)std::floor((float)params.height/16)*16;
-		qpu_allocBuffer(&bitmskBuffer, &base, lineWidth/8*lineCount, 4096);
 		tgtStride = lineWidth/8;
 		tgtBufferPtr = bitmskBuffer.ptr.vc;
+		printf("3 srcStride: %d, tgtStride: %d, lineWidth: %d \n", srcStride, tgtStride, lineWidth);
 	}
 
 	// ---- Generate tiling setup ----
@@ -188,14 +203,19 @@ int main(int argc, char **argv)
 	int numProgCols = (int)floor(numTileCols / 16.0); // Number of instances required (QPU is 16-way)
 	int droppedTileCols = numTileCols - numProgCols * 16; // Some are dropped for maximum performance, extra effort is not worth it
 	int splitCols = 1;
-/*	while (numProgCols * (splitCols+1) <= 12)
+	while (numProgCols * (splitCols+1) <= 12)
 	{ // Split columns among QPUs to minimize the number of idle QPUs
 		splitCols++;
-	}*/
+	}
 	int numInstances = numProgCols * splitCols;
 	if (mode == TILED)
+	{
 		printf("SETUP: %d instances processing 1/%d columns each, covering %dx%d tiles, plus %d columns dropped\n",
 			numInstances, splitCols, numProgCols*16, numTileRows, droppedTileCols);
+		lineWidth = lineWidth - 8*droppedTileCols;
+		tgtStride = lineWidth/8;
+		printf("4 srcStride: %d, tgtStride: %d, lineWidth: %d \n", srcStride, tgtStride, lineWidth);
+	}
 	else numInstances = 1;
 
 	// ---- Setup program ----
@@ -204,7 +224,7 @@ int main(int argc, char **argv)
 	QPU_PROGMEM progmemSetup {
 		.codeSize = qpu_getCodeSize(codeFile), //4096*4;
 		.uniformsSize =
-			(mode==FULL_FRAME || mode==BITMSK)? 6 :
+			(mode==FULL_FRAME)? 6 :
 			(mode==TILED? (uint32_t)numInstances*6 : 2),
 		.messageSize = 0 // 2 if qpu_executeProgramMailbox is used, instead of qpu_executeProgramDirect
 	};
@@ -220,11 +240,11 @@ int main(int argc, char **argv)
 		program.progmem.uniforms.arm.uptr[0] = 0; // Enter source pointer each frame
 		program.progmem.uniforms.arm.uptr[1] = tgtBufferPtr;
 	}
-	else if (mode == FULL_FRAME || mode == BITMSK)
+	else if (mode == FULL_FRAME)
 	{ // Set up one program to handle the full frame
 		program.progmem.uniforms.arm.uptr[0] = 0; // Enter source pointer each frame
 		program.progmem.uniforms.arm.uptr[1] = tgtBufferPtr;
-		program.progmem.uniforms.arm.uptr[2] = params.width; // Source stride
+		program.progmem.uniforms.arm.uptr[2] = params.width;
 		program.progmem.uniforms.arm.uptr[3] = tgtStride;
 		program.progmem.uniforms.arm.uptr[4] = lineWidth;
 		program.progmem.uniforms.arm.uptr[5] = lineCount;
@@ -236,8 +256,8 @@ int main(int argc, char **argv)
 			for (int r = 0; r < splitCols; r++)
 			{
 				program.progmem.uniforms.arm.uptr[c*splitCols*6 + r*6 + 0] = 0; // Enter source pointer each frame
-				program.progmem.uniforms.arm.uptr[c*splitCols*6 + r*6 + 1] = tgtBufferPtr + c*4*8*16 + r*lineCount/splitCols*tgtStride;
-				program.progmem.uniforms.arm.uptr[c*splitCols*6 + r*6 + 2] = params.width; // Source stride
+				program.progmem.uniforms.arm.uptr[c*splitCols*6 + r*6 + 1] = tgtBufferPtr + c*(buffer==RGB32? 4*8*16 : 16*16) + r*lineCount/splitCols*tgtStride;
+				program.progmem.uniforms.arm.uptr[c*splitCols*6 + r*6 + 2] = params.width;
 				program.progmem.uniforms.arm.uptr[c*splitCols*6 + r*6 + 3] = tgtStride;
 				program.progmem.uniforms.arm.uptr[c*splitCols*6 + r*6 + 4] = 8*16; // 16 elements working on 8-pixel columns each
 				program.progmem.uniforms.arm.uptr[c*splitCols*6 + r*6 + 5] = lineCount / splitCols;
@@ -460,33 +480,38 @@ int main(int argc, char **argv)
 
 			// ---- Framebuffer debugging ----
 
-			if (drawToFrameBuffer)
+			if (drawToFrameBuffer && (buffer == BITMSK || buffer == BLKMSK) && (numFrames % 10) == 0)
 			{ // Manual access to framebuffer
 				void *fbp = lock_fb(fbfd, finfo.smem_len);
-				if ((int)fbp == -1) {
+				if ((int)fbp == -1)
 					printf("Failed to mmap.\n");
-				}
 				else
-				{
-					if (mode == BITMSK && (numFrames % 1) == 0)
-					{ // Copy custom bitmap from buffer to screen for debugging
-						qpu_lockBuffer(&bitmskBuffer);
-						uint8_t *ptr = (uint8_t*)bitmskBuffer.ptr.arm.uptr;
-						for (int y = 0; y < lineCount; y++)
+				{ // Copy custom bitmap from buffer to screen for debugging
+					qpu_lockBuffer(&bitmskBuffer);
+					uint16_t dV = std::min(lineCount, 480u), dH = std::min(lineWidth, 640u);
+					//printf("srcStride: %d, tgtStride: %d, lineWidth: %d, lineCount: %d, width: %d \n", srcStride, tgtStride, lineWidth, lineCount, params.width);
+					for (int y = 0; y < dV; y++)
+					{
+						uint8_t *px = (uint8_t*)fbp + y*finfo.line_length;
+						uint16_t tgtY = y * lineCount / dV;
+						for (int x = 0; x < dH; x++)
 						{
-							for (int x = 0; x < lineWidth/8; x++)
-							{
-								uint8_t msk = *(ptr + y*tgtStride + x);
-								uint32_t *px = (uint32_t*)((uint8_t*)fbp + (y*finfo.line_length + x * 8 * vinfo.bits_per_pixel/8));
-								for (int i = 0; i < 8; i++)
-								{ // Colors are in ARGB order, to be precise A8RGB565
-									if ((msk >> i) & 1) px[i] = 0xFFFFFFFF;
-									else px[i] = 0xFF000000;
-								}
+							uint16_t tgtX = x * lineWidth / dH;
+							uint8_t *mask = (uint8_t*)bitmskBuffer.ptr.arm.uptr;
+							uint16_t maskX = tgtX / 8;
+							uint16_t maskY = tgtY;
+							if (buffer == BLKMSK)
+							{ // Address in blocks and not in bits
+								maskX = maskX * 16;
+								maskY = maskY / 16 * 16;
+								mask += tgtY % 16;
 							}
+							mask += maskY*tgtStride + maskX;
+							*(uint32_t*)px = ((*mask >> tgtX%8) & 1)? 0xFFFFFFFF : 0xFF000000;
+							px += vinfo.bits_per_pixel/8;
 						}
-						qpu_unlockBuffer(&bitmskBuffer);
 					}
+					qpu_unlockBuffer(&bitmskBuffer);
 					unlock_fb(fbp, finfo.smem_len);
 				}
 			}
@@ -529,6 +554,9 @@ error_gcs:
 		qpu_setReservationSetting(&base, i, 0b0000);
 
 error_qpu:
+
+	if (buffer == BITMSK || buffer == BLKMSK)
+		qpu_releaseBuffer(&bitmskBuffer);
 
 	if (drawToFrameBuffer)
 		close(fbfd);

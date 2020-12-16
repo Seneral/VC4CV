@@ -64,7 +64,7 @@ static void gcs_onCameraOutput(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T *buffer);
 static void gcs_onWatchdogTrigger(void *context);
 
 
-GCS *gcs_create(const GCS_CameraParams *cameraParams)
+GCS *gcs_create(GCS_CameraParams *cameraParams)
 {
 	// Temporary status return values
 	MMAL_STATUS_T mstatus;
@@ -153,6 +153,9 @@ GCS *gcs_create(const GCS_CameraParams *cameraParams)
 	// Setup buffer pool for camera output port to use (after enabling zero-copy so those buffers will be allocated through VCSM)
 	gcs->bufferPool = mmal_port_pool_create(gcs->cameraOutput, gcs->cameraOutput->buffer_num, gcs->cameraOutput->buffer_size);
 	CHECK_STATUS_M((gcs->bufferPool ? MMAL_SUCCESS : MMAL_ENOMEM), "Error allocating pool", error_pool);
+
+	cameraParams->width = gcs->cameraOutput->format->es->video.width;
+	LOG_ERROR("Format %d", gcs->cameraOutput->format->es->video.width);
 
 	LOG_TRACE("Finished setup of GCS");
 
