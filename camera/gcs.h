@@ -39,7 +39,7 @@ typedef struct GCS_CameraParams
 /* Opaque GPU Camera Stream structure */
 typedef struct GCS GCS;
 
-GCS *gcs_create(const GCS_CameraParams *cameraParams);
+GCS *gcs_create(GCS_CameraParams *cameraParams);
 void gcs_destroy(GCS *gcs);
 
 /* Start GCS (camera stream). Enables MMAL camera and starts watchdog */
