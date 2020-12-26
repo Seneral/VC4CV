@@ -203,7 +203,7 @@ void qpu_logPerformance (QPU_PerformanceState *state)
 	double qpuStallPerc = (double)stallCycles / loadCycles * 100.0;
 	double avgTMUStalls = (double)diff.clkTMUStall / (diff.numTMUProc+1);
 	double TMUCachedPerc = ((double)diff.numTMUProc - diff.numTMUMiss) / (diff.numTMUProc+1) * 100.0;
-	double TMUUsagePerc = (double)diff.numTMUProc / totalCycles / 2.0 * 20.0 * 100.0;
+	double TMUUsagePerc = (double)diff.numTMUProc / loadCycles / 2.0 * 20.0 * 100.0;
 	// only works for 1 TMU per 2 QPUs, as in a RPi VC4; for every second QPU 20 cycles could be used for TMU access
 	// That means with caching more than 100% bandwidth could be used in this metric, but whatever
 	double VDWStallPerc = (double)diff.clkVDWStall / loadCycles * 100.0;

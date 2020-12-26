@@ -59,6 +59,15 @@ max y, r0, 1;
 	mul24 r1, elem_num, srcStride; # individual offset of each SIMD vector element
 	add srcPtr, r0, r1;
 
+	nop;
+	nop;
+	nop;
+	nop;
+	nop;
+	nop;
+	nop;
+	nop;
+	nop;
 
 	# Calculate base target address of current block
 	mul24 r0, line, tgtStride;

@@ -20,10 +20,11 @@
 #define RGB32 0			// Normal RGB 32Bit buffer (e.g. framebuffer)
 #define BITMSK 1		// Special 1Bit buffer in normal layout
 #define BLKMSK 2		// Special 1Bit buffer in 8x32 block layout
+#define BILMSK 3		// Special 1Bit buffer in 8x32 block layout, interleaved
 
-#define RUN_CAMERA	// Have the camera supply frames
+//#define RUN_CAMERA	// Have the camera supply frames
 			// EITHER use emulated buffers with debug content (default)
-#define USE_CAMERA	// OR use camera frames directly in QPU program
+//#define USE_CAMERA	// OR use camera frames directly in QPU program
 //#define CPY_CAMERA	// OR copy copy frames into emulated buffers
 
 struct termios terminalSettings;
@@ -57,10 +58,12 @@ int main(int argc, char **argv)
 	bool drawToFrameBuffer = false;
 	int mode = FULL_FRAME;
 	int buffer = RGB32;
-	bool enableQPU[12];
+	bool enableQPU[12] = { 1,1,1,1, 1,1,1,1, 1,1,1,1 };
+	int padding = 0; // padding on both sides of the image - set up for 5x5 kernel (2 on each side)
+	int blockLength = 16;
 
 	int arg;
-	while ((arg = getopt(argc, argv, "c:w:h:f:s:i:m:b:o:t:da:e:q:")) != -1)
+	while ((arg = getopt(argc, argv, "c:w:h:f:s:i:m:b:o:t:da:e:q:p:l:")) != -1)
 	{
 		switch (arg)
 		{
@@ -91,6 +94,7 @@ int main(int argc, char **argv)
 				if (strcmp(optarg, "RGB") == 0) buffer = RGB32;
 				else if (strcmp(optarg, "bitmsk") == 0) buffer = BITMSK;
 				else if (strcmp(optarg, "blkmsk") == 0) buffer = BLKMSK;
+				else if (strcmp(optarg, "bilmsk") == 0) buffer = BILMSK;
 				else buffer = RGB32;
 				break;
 			case 't':
@@ -108,6 +112,12 @@ int main(int argc, char **argv)
 			case 'q':
 				for (int i = 0; i < 12 && i < strlen(optarg); i++)
 					enableQPU[i] = optarg[i] == '1';
+				break;
+			case 'p':
+				padding = std::stoi(optarg);
+				break;
+			case 'l':
+				blockLength = std::stoi(optarg);
 				break;
 			default:
 				printf("Usage: %s -c codefile [-w width] [-h height] [-f fps] [-s shutter-speed-ns] [-i iso] [-m mode (full, tiled, bitmsk)] [-d display-to-fb] [-t max-num-frames]\n", argv[0]);
@@ -137,6 +147,10 @@ int main(int argc, char **argv)
 	auto startTime = std::chrono::high_resolution_clock::now();
 	auto lastTime = startTime;
 	int lastFrames = 0, numFrames = 0;
+	// QPU usage
+	int qpusUsed = 0;
+	for (int i = 0; i < 12; i++)
+		qpusUsed += enableQPU[i]? 1 : 0;
 
 	// Init BCM Host
 	bcm_host_init();
@@ -172,7 +186,6 @@ int main(int argc, char **argv)
 				lineCount = std::min(lineCount, vinfo.yres);
 				printf("Limiting resolution to screen while -d is enabled! %dx%d \n", lineWidth, lineCount);
 			}
-			printf("1 srcStride: %d, tgtStride: %d, lineWidth: %d \n", srcStride, tgtStride, lineWidth);
 		}
 	}
 	if (!drawToFrameBuffer)
@@ -180,9 +193,8 @@ int main(int argc, char **argv)
 		qpu_allocBuffer(&targetBuffer, &base, params.width*params.height*4, 4096);
 		tgtStride = params.width*4;
 		tgtBufferPtr = targetBuffer.ptr.vc;
-		printf("2 srcStride: %d, tgtStride: %d, lineWidth: %d \n", srcStride, tgtStride, lineWidth);
 	}
-	if (buffer == BITMSK || buffer == BLKMSK)
+	if (buffer == BITMSK || buffer == BLKMSK || buffer == BILMSK)
 	{ // Set up bit target, one bit per pixel
 		qpu_allocBuffer(&bitmskBuffer, &base, lineWidth/8*lineCount, 4096);
 		// Width and height must be multiple of 32 and 16 respectively
@@ -190,20 +202,18 @@ int main(int argc, char **argv)
 		lineCount = (uint32_t)std::floor((float)params.height/16)*16;
 		tgtStride = lineWidth/8;
 		tgtBufferPtr = bitmskBuffer.ptr.vc;
-		printf("3 srcStride: %d, tgtStride: %d, lineWidth: %d \n", srcStride, tgtStride, lineWidth);
 	}
 
 	// ---- Generate tiling setup ----
 
 	// Split image in columns of 8x16 pixels assigned to one QPU each.
 	// Split vertically until most or all QPUs are used
-	int padding = 0; // padding on both sides of the image - set up for 5x5 kernel (2 on each side)
 	int numTileCols = (int)floor((lineWidth-padding) / 8.0); // Num of 8px Tiles in a row with padding
 	int numTileRows = (int)floor((lineCount-padding) / 8.0); // Num of 8px Tiles in a col with padding
 	int numProgCols = (int)floor(numTileCols / 16.0); // Number of instances required (QPU is 16-way)
 	int droppedTileCols = numTileCols - numProgCols * 16; // Some are dropped for maximum performance, extra effort is not worth it
 	int splitCols = 1;
-	while (numProgCols * (splitCols+1) <= 12)
+	while (numProgCols * (splitCols+1) <= qpusUsed)
 	{ // Split columns among QPUs to minimize the number of idle QPUs
 		splitCols++;
 	}
@@ -212,10 +222,9 @@ int main(int argc, char **argv)
 	{
 		printf("SETUP: %d instances processing 1/%d columns each, covering %dx%d tiles, plus %d columns dropped\n",
 			numInstances, splitCols, numProgCols*16, numTileRows, droppedTileCols);
-		lineWidth = lineWidth - 8*droppedTileCols;
-		if (buffer == BITMSK || buffer == BLKMSK)
-			tgtStride = lineWidth/8;
-		printf("4 srcStride: %d, tgtStride: %d, lineWidth: %d \n", srcStride, tgtStride, lineWidth);
+//		lineWidth = lineWidth - 8*droppedTileCols;
+//		if (buffer == BITMSK || buffer == BLKMSK)
+//			tgtStride = lineWidth/8;
 	}
 	else numInstances = 1;
 
@@ -257,7 +266,7 @@ int main(int argc, char **argv)
 			for (int r = 0; r < splitCols; r++)
 			{
 				program.progmem.uniforms.arm.uptr[c*splitCols*6 + r*6 + 0] = 0; // Enter source pointer each frame
-				program.progmem.uniforms.arm.uptr[c*splitCols*6 + r*6 + 1] = tgtBufferPtr + c*(buffer==RGB32? 4*8*16 : 16*16) + r*lineCount/splitCols*tgtStride;
+				program.progmem.uniforms.arm.uptr[c*splitCols*6 + r*6 + 1] = tgtBufferPtr + c*(buffer==RGB32? 4*8*16 : 16*blockLength) + r*lineCount/splitCols*tgtStride;
 				program.progmem.uniforms.arm.uptr[c*splitCols*6 + r*6 + 2] = params.width;
 				program.progmem.uniforms.arm.uptr[c*splitCols*6 + r*6 + 3] = tgtStride;
 				program.progmem.uniforms.arm.uptr[c*splitCols*6 + r*6 + 4] = 8*16; // 16 elements working on 8-pixel columns each
@@ -295,6 +304,7 @@ int main(int argc, char **argv)
 	qpu_logReservationSettings(&base);
 	// Setup performance monitoring
 	qpu_setupPerformanceCounters(&base, &perfState);
+	perfState.qpusUsed = std::min(numInstances, qpusUsed);
 
 	// ---- Setup Camera ----
 
@@ -321,6 +331,8 @@ int main(int argc, char **argv)
 			{
 				// Write test data in Y component (UV are after this, but are not used)
 				YUVFrameData[y*params.width + x] = ((x+params.width/(i+1))*255/params.width)%256 + ((y+params.height/(i+1))*255/params.height)%256;
+//				YUVFrameData[y*params.width + x] = ((y+params.height/(i+1))*255/params.height)%256;
+//				YUVFrameData[y*params.width + x] = ((y)*255/params.height)%256;
 			}
 		}
 		qpu_unlockBuffer(&camEmulBuf[i]);
@@ -376,6 +388,7 @@ int main(int argc, char **argv)
 	#endif
 #endif
 #ifdef USE_CAMERA
+			// Lock VCSM buffer to get VC-space address
 			uint32_t cameraBufferPtr = mem_lock(base.mb, cameraBufferHandle);
 #else
 			qpu_lockBuffer(&camEmulBuf[numFrames%emulBufCnt]);
@@ -408,7 +421,7 @@ int main(int argc, char **argv)
 
 			// ---- Program execution ----
 
-/*			if (mode == BITMSK)
+/*			if (mode == BITMSK || mode == BLKMSK || mode == BILMSK)
 				qpu_lockBuffer(&bitmskBuffer);
 			else if (!drawToFrameBuffer)
 				qpu_lockBuffer(&targetBuffer);
@@ -427,8 +440,7 @@ int main(int argc, char **argv)
 			// Log errors occurred during execution
 			qpu_logErrors(&base);
 
-#ifdef USE_CAMERA
-#else
+#ifndef USE_CAMERA
 			qpu_unlockBuffer(&camEmulBuf[numFrames%emulBufCnt]);
 #endif
 #ifdef RUN_CAMERA
@@ -438,8 +450,8 @@ int main(int argc, char **argv)
 			gcs_returnFrameBuffer(gcs);
 #endif
 
-/*			// Unlock target buffers
-			if (mode == BITMSK)
+			// Unlock target buffers
+/*			if (mode == BITMSK || mode == BLKMSK || mode == BILMSK)
 				qpu_unlockBuffer(&bitmskBuffer);
 			else if (!drawToFrameBuffer)
 				qpu_unlockBuffer(&targetBuffer);
@@ -481,7 +493,10 @@ int main(int argc, char **argv)
 
 			// ---- Framebuffer debugging ----
 
-			if (drawToFrameBuffer && (buffer == BITMSK || buffer == BLKMSK) && (numFrames % 10) == 0)
+			static int ilCnt = 0;
+			int ilMax = 1;//2;
+			ilCnt = (ilCnt+1)%ilMax;
+			if (drawToFrameBuffer && (buffer == BITMSK || buffer == BLKMSK || buffer == BILMSK) && (numFrames % 10) < ilMax)
 			{ // Manual access to framebuffer
 				void *fbp = lock_fb(fbfd, finfo.smem_len);
 				if ((int)fbp == -1)
@@ -489,25 +504,43 @@ int main(int argc, char **argv)
 				else
 				{ // Copy custom bitmap from buffer to screen for debugging
 					qpu_lockBuffer(&bitmskBuffer);
-					uint16_t dV = std::min(lineCount, 480u), dH = std::min(lineWidth, 640u);
+					int dV = std::min(lineCount, 720u), dH = std::min(lineWidth, 960u);
 					//printf("srcStride: %d, tgtStride: %d, lineWidth: %d, lineCount: %d, width: %d \n", srcStride, tgtStride, lineWidth, lineCount, params.width);
-					for (int y = 0; y < dV; y++)
+
+					for (int y = ilCnt; y < dV; y+=ilMax)
 					{
+						int tgtY = y * lineCount / dV;
 						uint8_t *px = (uint8_t*)fbp + y*finfo.line_length;
-						uint16_t tgtY = y * lineCount / dV;
+						uint8_t *maskBase = (uint8_t*)bitmskBuffer.ptr.arm.uptr;
+						int blkFactor = 1;
+						if (buffer == BLKMSK)
+						{ // Address in blocks and not in bits
+							int blkLine = tgtY % blockLength;
+							blkFactor = blockLength;
+							maskBase += (tgtY-blkLine) * tgtStride + blkLine;
+						}
+						else if (buffer == BILMSK)
+						{
+							int blkLine = tgtY % blockLength;
+							blkFactor = blockLength;
+							maskBase += (tgtY-blkLine) * tgtStride;
+							int intLine = tgtY%4;
+							int blkInt = blkLine - intLine;
+							for (int x = 0; x < dH; x++)
+							{
+								int tgtX = x * lineWidth / dH;
+								uint8_t *mask = maskBase + tgtX / 8 * blkFactor + blkInt + tgtX % 4;
+								*(uint32_t*)px = ((*mask >> ((tgtX%8)/4+intLine*2)) & 1)? 0xFFFFFFFF : 0xFF000000;
+								px += vinfo.bits_per_pixel/8;
+							}
+							continue;
+						}
+						else
+							maskBase += tgtY * tgtStride;
 						for (int x = 0; x < dH; x++)
 						{
-							uint16_t tgtX = x * lineWidth / dH;
-							uint8_t *mask = (uint8_t*)bitmskBuffer.ptr.arm.uptr;
-							uint16_t maskX = tgtX / 8;
-							uint16_t maskY = tgtY;
-							if (buffer == BLKMSK)
-							{ // Address in blocks and not in bits
-								maskX = maskX * 16;
-								maskY = maskY / 16 * 16;
-								mask += tgtY % 16;
-							}
-							mask += maskY*tgtStride + maskX;
+							int tgtX = x * lineWidth / dH;
+							uint8_t *mask = maskBase + tgtX / 8 * blkFactor;
 							*(uint32_t*)px = ((*mask >> tgtX%8) & 1)? 0xFFFFFFFF : 0xFF000000;
 							px += vinfo.bits_per_pixel/8;
 						}
