@@ -33,7 +33,6 @@ find_library(LIB_MMAL_COMP NAMES mmal_components HINTS /opt/vc/lib/)
 
 set(VC4CV_QPU_SOURCES
    camera/gcs.c
-   qpu/fbUtil.c
    qpu/mailbox.c
    qpu/qpu_base.c
    qpu/qpu_program.c
@@ -44,28 +43,17 @@ set(VC4CV_LIBRARIES
 	${LIB_BCMH} ${LIB_VCOS} ${LIB_VCSM}
 	${LIB_MMAL} ${LIB_MMAL_CORE} ${LIB_MMAL_UTIL} ${LIB_MMAL_COMP})
 
-add_custom_target(QPU ALL DEPENDS qpu QPUCV QPUMin)
+add_custom_target(QPU ALL DEPENDS main qpu_programs)
 
-# QPU CV Sample application
-add_executable(QPUCV ${VC4CV_QPU_SOURCES} main.cpp)
-target_link_libraries(QPUCV ${VC4CV_LIBRARIES})
-
-# QPU CV minimal application for tiled mode with bitmask buffer
-add_executable(QPUMin ${VC4CV_QPU_SOURCES} main_minimal.cpp)
-target_link_libraries(QPUMin ${VC4CV_LIBRARIES})
+# QPU minimal application
+add_executable(main ${VC4CV_QPU_SOURCES} main.cpp)
+target_link_libraries(main ${VC4CV_LIBRARIES})
 
 # Set VC4ASM compiler to compile all asm source files
 set(QPU_SOURCES
-	qpu_programs/qpu_fb_pattern.asm
-	qpu_programs/qpu_debug_full.asm
-	qpu_programs/qpu_debug_tiled.asm
-	qpu_programs/qpu_blit_full.asm
-	qpu_programs/qpu_blit_tiled.asm
-	qpu_programs/qpu_mask_full.asm
-	qpu_programs/qpu_mask_tiled.asm
-	qpu_programs/qpu_free_mutex.asm
+	qpu_tmu_read.asm
 )
-add_custom_target(qpu)
+add_custom_target(qpu_programs)
 foreach (file ${QPU_SOURCES})
     get_filename_component(file_name ${file} NAME_WE)
     add_custom_command(
@@ -76,5 +64,5 @@ foreach (file ${QPU_SOURCES})
     add_custom_target(${file_name}
 		DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/${file_name}.bin
 	)
-	add_dependencies(qpu ${file_name})
+	add_dependencies(qpu_programs ${file_name})
 endforeach()

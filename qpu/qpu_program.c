@@ -78,9 +78,6 @@ int qpu_executeProgramDirect (QPU_PROGRAM *program, QPU_BASE *base, int numInst,
 //	if (qpuWaitCount < qpuFinished)
 //		printf("QPU executing %d programs; waiting for %d with %d queued and %d already finished! \n", numInst, qpuWaitCount, qpuQueued, qpuFinished);
 
-	if (perfState != NULL)
-		perfState->qpusUsed = numInst;
-
 	for (int q = 0; q < numInst; q++)
 	{
 		// Maximum number of queued requests reached - wait until queue has space

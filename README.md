@@ -4,32 +4,18 @@ VideoCore IV Computer Vision framework and examples - GL- and QPU-based
 This repository aims to make low-level CV on the RaspberryPis /w VideoCore IV (e.g. Zero) more accessible by providing examples and a slim framework to build on. It only covers real-time camera frame processing using both OpenGL shaders and QPU assembly programs.
 
 ## Test Commands:
-1. Blit to screen using a single QPU shader
-  - Works fine in all cases
-```
-sudo ./QPUCV -c qpu_blit_full.bin -m full -b RGB -w 640 -h 480 -s 5000 -i 60000 -e -a -f 30 -d
-```
-2. Threshold shader to custom buffer with a single QPU shader (-d uses CPU to blit that to screen every 10th frame)
-  - Works fine, but currently has a bug and only does the left side
-```
-sudo ./QPUCV -c qpu_mask_full.bin -m full -b bitmsk -w 640 -h 480 -s 5000 -i 60000 -e -a -f 30 -d
-```
-3. Blit to screen using the tiled shader (either using a single QPU or all at once)
-  - Single QPU (first line) works fine everywhere
-  - All QPU (second line) stalls only on the Zero (currently crashes sometimes as well)
-```
-sudo ./QPUCV -c qpu_blit_tiled.bin -m tiled -b RGB -w 640 -h 480 -s 5000 -i 60000 -e -a -f 30 -q 100000000000 -d
-sudo ./QPUCV -c qpu_blit_tiled.bin -m tiled -b RGB -w 640 -h 480 -s 5000 -i 60000 -e -a -f 10 -q 111111111111 -d
-```
-4. Threshold shader to custom buffer using the tiled shader
-  - Currently works on 3 B+, but stalls immediately on the Zeros, even if only one QPU is used
-```
-sudo ./QPUCV -c qpu_mask_tiled.bin -m tiled -b blkmsk -w 640 -h 480 -s 5000 -i 60000 -e -a -f 10 -q 100000000000
-```
-This also exists in a minimal version, QPUMin, which can only execute aboce command without extra visualization and options:
-```
-sudo ./QPUMin -c qpu_mask_tiled.bin -q 100000000000
-```
+Reduced testing case further
+
+Left only a single program that works on the 3 B+ just fine, but stalls on the Zero IF the buffers fed to the program are camera frames.
+The programs simply uses the TMU to read the buffer, but then discards the values.
+Options to the main program include -t to set the amount of programs the buffer is split among, and -m to toggle the way the programs are distributed among the buffer (continuous or interleaved).
+And -e, which will replace the camera buffer with a normal VCSM buffer.
+
+Observations:
+`sudo ./main -c qpu_tmu_read.asm -e`              And any combination of other parameters work fine on the Zero
+`sudo ./main -c qpu_tmu_read.asm`                 And any combination without -e stall immediately (41/45 instructions in) or after a few frames
+
+Note that -e does NOT stop the camera from running and supplying frames, it just replaces those with emulated buffers before feeding them to the program.
 
 
 ### For whom is this?
