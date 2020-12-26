@@ -154,8 +154,8 @@ GCS *gcs_create(GCS_CameraParams *cameraParams)
 	gcs->bufferPool = mmal_port_pool_create(gcs->cameraOutput, gcs->cameraOutput->buffer_num, gcs->cameraOutput->buffer_size);
 	CHECK_STATUS_M((gcs->bufferPool ? MMAL_SUCCESS : MMAL_ENOMEM), "Error allocating pool", error_pool);
 
-	cameraParams->width = gcs->cameraOutput->format->es->video.width;
-	LOG_ERROR("Format %d", gcs->cameraOutput->format->es->video.width);
+//	cameraParams->width = gcs->cameraOutput->format->es->video.width;
+//	LOG_ERROR("Format %d", gcs->cameraOutput->format->es->video.width);
 
 	LOG_TRACE("Finished setup of GCS");
 

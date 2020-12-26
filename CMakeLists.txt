@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 2.8)
+cmake_minimum_required(VERSION 3.0)
 project(VC4CV)
 
 # For desktop compilation
@@ -17,13 +17,6 @@ include_directories(/opt/vc/include/)
 include_directories(/opt/vc/include/interface/vcos/pthreads)
 include_directories(/opt/vc/include/interface/vmcs_host/linux)
 include_directories(/opt/vc/include/interface/vcsm)
-
-include_directories(./camera)
-include_directories(./qpu)
-include_directories(./gl)
-include_directories(./gl_blobs)
-
-link_directories(/opt/vc/lib/)
 
 find_library(LIB_BCMH NAMES bcm_host HINTS /opt/vc/lib/)
 find_library(LIB_VCOS NAMES vcos HINTS /opt/vc/lib/)
@@ -57,17 +50,24 @@ set(VC4CV_LIBRARIES
 set(VC4CV_GL_LIBRARIES
 	${LIB_BEGL} ${LIB_GLES})
 
+# Grouped targets
+add_custom_target(qpu DEPENDS QPUCV qpu_programs)
+add_custom_target(gl DEPENDS GLCV GLBlobs)
+
 # QPU CV Sample application
 add_executable(QPUCV ${VC4CV_QPU_SOURCES} main_qpu.cpp)
 target_link_libraries(QPUCV ${VC4CV_LIBRARIES})
+target_include_directories(QPUCV PRIVATE qpu camera)
 
 # GL CV sample application
 add_executable(GLCV ${VC4CV_GL_SOURCES} main_gl.cpp)
 target_link_libraries(GLCV ${VC4CV_LIBRARIES} ${VC4CV_GL_LIBRARIES})
+target_include_directories(GLCV PRIVATE gl camera)
 
 # GL blob tracking application
 add_executable(GLBlobs ${VC4CV_GL_SOURCES} main_gl_blobs.cpp gl_blobs/blobdetection.cpp)
 target_link_libraries(GLBlobs ${VC4CV_LIBRARIES} ${VC4CV_GL_LIBRARIES})
+target_include_directories(GLBlobs PRIVATE gl gl_blobs camera)
 
 # Set VC4ASM compiler to compile all asm source files
 set(QPU_SOURCES
@@ -77,10 +77,22 @@ set(QPU_SOURCES
 	qpu_programs/qpu_blit_full.asm
 	qpu_programs/qpu_blit_tiled.asm
 	qpu_programs/qpu_mask_full.asm
-	qpu_programs/qpu_mask_tiled.asm
+	qpu_programs/qpu_mask_tiled_1x1.asm
+	qpu_programs/qpu_mask_tiled_1x1_optimized.asm
+	qpu_programs/qpu_mask_tiled_1x5.asm
+	qpu_programs/qpu_mask_tiled_1x5_organized.asm
+	qpu_programs/qpu_mask_tiled_5x5.asm
+	qpu_programs/qpu_mask_tiled_5x5_memory.asm
+	qpu_programs/qpu_mask_tiled_5x5_min.asm
+	qpu_programs/qpu_mask_tiled_5x5_minopt.asm
+	qpu_programs/qpu_mask_tiled_5x5_blob.asm
+	qpu_programs/qpu_mask_tiled_5x5_blobopt.asm
+	qpu_programs/qpu_mask_tiled_5x5_blobwrite.asm
+	qpu_programs/qpu_tmu_read_column.asm
+	qpu_programs/qpu_tmu_read.asm
 	qpu_programs/qpu_free_mutex.asm
 )
-add_custom_target(qpu)
+add_custom_target(qpu_programs)
 foreach (file ${QPU_SOURCES})
     get_filename_component(file_name ${file} NAME_WE)
     add_custom_command(
@@ -91,5 +103,5 @@ foreach (file ${QPU_SOURCES})
     add_custom_target(${file_name}
 		DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/${file_name}.bin
 	)
-	add_dependencies(qpu ${file_name})
+	add_dependencies(qpu_programs ${file_name})
 endforeach()
