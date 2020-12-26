@@ -88,8 +88,6 @@ set(QPU_SOURCES
 	qpu_programs/qpu_mask_tiled_5x5_blob.asm
 	qpu_programs/qpu_mask_tiled_5x5_blobopt.asm
 	qpu_programs/qpu_mask_tiled_5x5_blobwrite.asm
-	qpu_programs/qpu_tmu_read_column.asm
-	qpu_programs/qpu_tmu_read.asm
 	qpu_programs/qpu_free_mutex.asm
 )
 add_custom_target(qpu_programs)

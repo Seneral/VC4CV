@@ -504,7 +504,7 @@ int main(int argc, char **argv)
 				else
 				{ // Copy custom bitmap from buffer to screen for debugging
 					qpu_lockBuffer(&bitmskBuffer);
-					int dV = std::min(lineCount, 720u), dH = std::min(lineWidth, 960u);
+					int dV = std::min(lineCount, 480u), dH = std::min(lineWidth, 640u);
 					//printf("srcStride: %d, tgtStride: %d, lineWidth: %d, lineCount: %d, width: %d \n", srcStride, tgtStride, lineWidth, lineCount, params.width);
 
 					for (int y = ilCnt; y < dV; y+=ilMax)
