@@ -174,7 +174,7 @@ void qpu_compilePerformance(QPU_PerformanceState *state, QPU_Performance *perf, 
 	perf->clkInst = perfData[ 3] / 4;
 	perf->clkTMUStall = perfData[ 4] / 4;
 	perf->numTMUProc = perfData[ 5] / 4;
-	perf->numTMUMiss = perfData[ 6]; // IDK
+	perf->numTMUMiss = perfData[ 6] * 4;
 	perf->clkVDWStall = perfData[ 7] / 4;
 	perf->clkVCDStall = perfData[ 8] / 4;
 	perf->numL2CHits = perfData[ 9];
@@ -203,7 +203,7 @@ void qpu_logPerformance (QPU_PerformanceState *state)
 	double qpuStallPerc = (double)stallCycles / loadCycles * 100.0;
 	double avgTMUStalls = (double)diff.clkTMUStall / (diff.numTMUProc+1);
 	double TMUCachedPerc = ((double)diff.numTMUProc - diff.numTMUMiss) / (diff.numTMUProc+1) * 100.0;
-	double TMUUsagePerc = (double)diff.numTMUProc / loadCycles / 2.0 * 20.0 * 100.0;
+	double TMUUsageInter = (double)loadCycles / (diff.numTMUProc+1);
 	// only works for 1 TMU per 2 QPUs, as in a RPi VC4; for every second QPU 20 cycles could be used for TMU access
 	// That means with caching more than 100% bandwidth could be used in this metric, but whatever
 	double VDWStallPerc = (double)diff.clkVDWStall / loadCycles * 100.0;
@@ -216,9 +216,9 @@ void qpu_logPerformance (QPU_PerformanceState *state)
 	printf("     Clock %uMHz - %uMHz | %.01f%% total load | %.01f%% load for used QPUs | %.1f°C SoC temp\n", state->clockRateMin/1000000, state->clockRateMax/1000000, qpuLoadPerc, qpuUsedLoadPerc, state->tempSOC/1000.0f);
 	printf("     %llu instructions | %llu load cycles | %.01f%% stalls\n", diff.clkInst, loadCycles, qpuStallPerc);
 //	printf("     TMU: %llu stalls | %llu processed | %llu cache misses\n", diff.clkTMUStall, diff.numTMUProc, diff.numTMUMiss);
-	printf("     TMU: %.1f%% realistic bandwidth usage | %.1f average stall cycles | %.1f%% cached\n", TMUUsagePerc, avgTMUStalls, TMUCachedPerc);
+	printf("     TMU: %.1f avg access interval | %.1f avg stall cycles | %.1f%% cached\n", TMUUsageInter, avgTMUStalls, TMUCachedPerc);
 //	printf("     VPM: %llu VDW stall cycles | %llu VCD stall cycles\n", diff.clkVDWStall, diff.clkVCDStall);
-	printf("     VPM: %.1f%% VDW stall | %.1f%% VCD stall (average of program cycles)\n", VDWStallPerc, VCDStallPerc);
+	printf("     VPM: %.1f%% VDW stall | %.1f%% VCD stall (avg of program cycles)\n", VDWStallPerc, VCDStallPerc);
 //	printf("     L2C: %llu hits | %llu misses\n", diff.numL2CHits, diff.numL2CMiss);
 	printf("     L2C: %.2f%% miss (%llu hits | %llu misses)\n", L2CMissPerc, diff.numL2CHits, diff.numL2CMiss);
 
