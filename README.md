@@ -11,6 +11,9 @@ The QPU is the parallel vector processor in the VideoCore IV chip. The OpenGL ES
 The GL way is easier to implement and, given examples, relatively painless. However, your framerate is pretty much capped at 60fps and processing capabilities are limited. Your processing time is measured in tens of milliseconds when dealing with high resolutions (1640x1232) for any shader that is a bit more complex. <br>
 The QPU way is a lot more involved, requires potentially weeks of research (maybe less if my examples serve their intended purpose), and errors are guaranteed. However, by directly using the QPUs instruction set, you can optimize your algorithm to fit the QPUs pecularities and ultimately achieve a much better framerate. Even with higher resolutions or more complex shaders the frame time is generally measured in milliseconds.
 
+### ZeroCompat
+As seen in Issue #1, the Zero currently has issues reliably reading from the camera frames using the TMU. It can do so just fine using the VDR (VPM DMA) hardware, but not using the TMU. It can use the TMU just fine if you just copy the camera frame buffer into another buffer (even of the same type, in shared memory), but not on buffers directly from the camera pipeline. This issue is more prevelant when executing the program in parallel, with some programs working fine if only executed on one QPU at a time, and some failing even then. See [MakersVR](https://github.com/Seneral/MakersVR) for a workaround which uses a separate QPU program first to copy the camera frame using VDR+VDW (VPM DMA), until the bug is adressed (hopefully soon). 
+
 ### Examples?
 There are some clean examples on how to use both the GL and QPU way. Look into Commands.txt for example commands to invoke these examples. To compile the qpu_programs, you first need to make and install [vc4asm](https://github.com/maazl/vc4asm/).
 #### GL
@@ -23,5 +26,7 @@ There is currently only one program, main_qpu, which is parameterized to be able
 3. qpu_blit_full: Same fullscreen access structure as above, but actually accesses the camera frame using the TMU and writes it to the framebuffer.
 4. qpu_mask_full: Same fullscreen access structure as above, but executes a simple threshold effect on the camera frame before writing to the framebuffer. Currently a simple per-pixel 0.5 threshold value, including neighbouring pixels is not recommended in the full-screen shader.
 5. qpu_debug_tiled: Debugs the access pattern of the multi-program tiled shader. Shows in which order parts of the screen are handled in the shader.
-6. qpu_blit_tiled: Same tiled access structure as above, but actually accesses the camera frame using the TMU and writes it to the framebuffer (Warning: this does not work currently! VPM access and TMU interferes in a way which causes the QPU to crash, overwrite the whole physical memory and thus causes the whole RaspberryPi to crash. No permanent damage to the system, but power cut is required)
-7. qpu_mask_tiled: Planned to create once qpu_blit_tiled works. Much higher performance expected.
+6. qpu_blit_tiled: Same tiled access structure as above, but actually accesses the camera frame using the TMU and writes it to the framebuffer (Warning: This program is affected by the ZeroCompat bug!)
+7. qpu_mask_tiled: This program and all it's variations do actual processing and outputting a bitmask in various different ways (Warning: This program is affected by the ZeroCompat bug!)
+
+To see the QPU path being used in a real project, take a look at [MakersVR](https://github.com/Seneral/MakersVR), it uses the QPU in a complex way and also employs the ZeroCompat workaround.
